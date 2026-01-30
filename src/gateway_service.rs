@@ -47,7 +47,7 @@ impl rms::rms_config_api_server::RmsConfigApi for RmsApiGateway {
 
     async fn get_beam_config(
         &self,
-        req: Request<rms::SatBeamId>,
+        req: Request<rms::GetBeamConfigRequest>,
     ) -> Result<Response<rms::BeamBasicConfig>> {
         self.client().get_beam_config(req).await
     }
@@ -58,7 +58,7 @@ impl rms::rms_config_api_server::RmsConfigApi for RmsApiGateway {
 
     async fn get_beam_enable(
         &self,
-        req: Request<rms::SatBeamId>,
+        req: Request<rms::GetBeamEnableRequest>,
     ) -> Result<Response<rms::BeamEnableSetting>> {
         self.client().get_beam_enable(req).await
     }

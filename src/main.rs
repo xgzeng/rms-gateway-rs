@@ -2,17 +2,48 @@ mod rms {
     tinc::include_proto!("rms");
 }
 
+mod json_convert;
+
 use rms::gsc_gateway_api_tinc::GscGatewayApiTinc;
 use rms::rms_config_api_tinc::RmsConfigApiTinc;
 
 mod gateway_service;
-use gateway_service::{RmsApiGateway, GscApiProxy};
+use gateway_service::{GscApiProxy, RmsApiGateway};
 
+use axum::body::{Body, Bytes};
+use futures_util::stream;
 use http::header::{CONTENT_TYPE, HeaderValue};
+use serde_json::Value;
+use std::convert::Infallible;
 use tower_http::set_header::SetRequestHeaderLayer;
 
 async fn hello_world() -> String {
     "hello, world".to_string()
+}
+
+fn map_json_body(body: Body, convert: fn(&Value) -> Value) -> Body {
+    Body::from_stream(stream::once(async move {
+        let bytes = match axum::body::to_bytes(body, usize::MAX).await {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok::<Bytes, Infallible>(Bytes::new()),
+        };
+
+        Ok(convert_json_bytes(&bytes, convert))
+    }))
+}
+
+fn convert_json_bytes(bytes: &Bytes, convert: fn(&Value) -> Value) -> Bytes {
+    if bytes.is_empty() {
+        return Bytes::copy_from_slice(bytes);
+    }
+
+    match serde_json::from_slice::<Value>(bytes) {
+        Ok(value) => match serde_json::to_vec(&convert(&value)) {
+            Ok(vec) => Bytes::from(vec),
+            Err(_) => Bytes::copy_from_slice(bytes),
+        },
+        Err(_) => Bytes::copy_from_slice(bytes),
+    }
 }
 
 #[tokio::main]
@@ -31,10 +62,18 @@ async fn main() -> anyhow::Result<()> {
 
     let api_router = tinc_svc_rms.into_router().merge(tinc_svc_gsc.into_router());
 
+    // Transform json body keys between lowerCamelCase and snake_case for backward compatibility
+    let api_router = api_router.layer(tower_http::map_request_body::MapRequestBodyLayer::new(
+        |body| map_json_body(body, json_convert::json_keys_to_snake_case),
+    ));
+    let api_router = api_router.layer(tower_http::map_response_body::MapResponseBodyLayer::new(
+        |body| map_json_body(body, json_convert::json_keys_to_lower_camel_case),
+    ));
+
     let app = app.nest("/rms/api/v1", api_router.clone());
     let app = app.nest("/rms/api/v2", api_router);
 
-    // for compability
+    // add content-type for backward compatibility
     let app = app.layer(SetRequestHeaderLayer::overriding(
         CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
